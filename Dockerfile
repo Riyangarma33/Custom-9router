@@ -23,6 +23,8 @@ COPY package.json ./
 RUN --mount=type=cache,target=/root/.npm \
     npm install \
       --registry="${NPM_REGISTRY}" \
+      --prefer-offline \
+      --no-audit \
       --fetch-retries=5 \
       --fetch-retry-factor=2 \
       --fetch-retry-mintimeout=10000 \
@@ -31,6 +33,7 @@ RUN --mount=type=cache,target=/root/.npm \
 
 COPY . ./
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_OPTIONS="--max-old-space-size=4096"
 RUN npm run build
 
 FROM ${NODE_IMAGE} AS runner
