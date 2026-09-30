@@ -7,6 +7,7 @@ import {
   extractApiKey,
   isValidApiKey,
 } from "../services/auth.js";
+import { resolveCallerContext } from "@/lib/auth/rbac";
 import { handleAntigravityQuotaError, clearAntigravityStrikes } from "../services/antigravityQuota.js";
 import { getSettings } from "@/lib/localDb";
 import { getModelInfo, getComboModels } from "../services/model.js";
@@ -56,6 +57,7 @@ export async function handleChat(request, clientRawRequest = null) {
   if (contextMarker) body.model = modelStr;
 
   // Request summary is emitted as the unified "▶" line in chatCore (has fmt/thinking/account)
+  const callerContext = await resolveCallerContext(request);
 
   // Log API key (masked)
   const authHeader = request.headers.get("Authorization");
@@ -233,7 +235,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
   let lastHeaders = null;
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model);
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { callerContext });
 
     // All accounts unavailable
     if (!credentials || credentials.allRateLimited) {

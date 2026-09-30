@@ -10,6 +10,8 @@ import {
   verifyOidcIdToken,
 } from "@/lib/auth/oidc";
 import { setDashboardAuthCookie } from "@/lib/auth/dashboardSession";
+import { upsertSsoUser } from "@/lib/db/repos/usersRepo.js";
+import { getMembershipsForUser } from "@/lib/db/repos/membershipsRepo.js";
 
 function clearOidcCookies(cookieStore) {
   cookieStore.delete("oidc_state");
@@ -71,12 +73,34 @@ export async function GET(request) {
       nonce: storedNonce,
     });
 
+    const email = pickOidcEmail(payload) || `${payload.sub}@oidc.local`;
+    const displayName = pickOidcDisplayName(payload);
+
+    // Persist real user row in users table
+    const user = await upsertSsoUser({
+      email,
+      displayName,
+      authSource: "oidc",
+      sub: payload.sub,
+    });
+
+    // Check user org memberships
+    const memberships = await getMembershipsForUser(user.id);
+    const firstOrg = memberships[0] || null;
+    const activeOrgId = firstOrg ? firstOrg.orgId : null;
+    const role = firstOrg ? firstOrg.role : "member";
+
     clearOidcCookies(cookieStore);
     await setDashboardAuthCookie(cookieStore, request, {
+      userId: user.id,
+      email: user.email,
+      displayName: user.display_name,
+      activeOrgId,
+      role,
       oidc: true,
       oidcSub: payload.sub || null,
-      oidcEmail: pickOidcEmail(payload) || null,
-      oidcName: pickOidcDisplayName(payload),
+      oidcEmail: email,
+      oidcName: displayName,
     });
 
     return NextResponse.redirect(new URL("/dashboard", getPublicOrigin(request)));

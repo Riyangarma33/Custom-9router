@@ -4,7 +4,11 @@ import { useState, useEffect } from "react";
 import { Card, Button, Input } from "@/shared/components";
 
 export default function LoginPage() {
+  const [mode, setMode] = useState("login"); // 'login' | 'signup'
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [invitationCode, setInvitationCode] = useState("");
   const [error, setError] = useState("");
   const [resetHint, setResetHint] = useState("");
   const [retryAfter, setRetryAfter] = useState(0);
@@ -52,10 +56,9 @@ export default function LoginPage() {
           setSamlConfigured(data.samlConfigured === true);
           setSamlLoginLabel(data.samlLoginLabel || "Sign in with SAML SSO");
         } else {
-          // Safe fallback on non-OK response to avoid infinite loading state.
           setHasPassword(true);
         }
-      } catch (err) {
+      } catch {
         clearTimeout(timeoutId);
         setHasPassword(true);
       }
@@ -73,7 +76,7 @@ export default function LoginPage() {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ email: email.trim(), password }),
       });
 
       if (res.ok) {
@@ -85,18 +88,47 @@ export default function LoginPage() {
         window.location.assign("/dashboard");
       } else {
         const data = await res.json();
-        setError(data.error || "Invalid password");
+        setError(data.error || "Invalid credentials");
         if (data.resetHint) setResetHint(data.resetHint);
         if (data.retryAfter) setRetryAfter(Number(data.retryAfter));
       }
-    } catch (err) {
+    } catch {
       setError("An error occurred. Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
-  // Force a new password before entering the dashboard (default + remote).
+  const handleSignup = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+
+    try {
+      const res = await fetch("/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: email.trim(),
+          password,
+          displayName: displayName.trim(),
+          invitationCode: invitationCode.trim(),
+        }),
+      });
+
+      if (res.ok) {
+        window.location.assign("/dashboard");
+      } else {
+        const data = await res.json();
+        setError(data.error || "Failed to create account");
+      }
+    } catch {
+      setError("An error occurred. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSetNewPassword = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -113,7 +145,7 @@ export default function LoginPage() {
         const data = await res.json();
         setError(data.error || "Failed to set password");
       }
-    } catch (err) {
+    } catch {
       setError("An error occurred. Please try again.");
     } finally {
       setLoading(false);
@@ -130,14 +162,11 @@ export default function LoginPage() {
 
   const isSsoEnabled = ["sso", "oidc", "saml", "both"].includes(authMode);
   const activeSsoType = ssoType || (authMode === "saml" ? "saml" : "oidc");
-
   const samlAvailable = isSsoEnabled && activeSsoType === "saml" && samlConfigured;
   const oidcAvailable = isSsoEnabled && activeSsoType === "oidc" && oidcConfigured;
   const ssoAvailable = samlAvailable || oidcAvailable;
-
   const passwordAvailable = authMode === "password" || authMode === "both" || !ssoAvailable;
 
-  // Show loading state while checking password
   if (hasPassword === null) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-bg p-4">
@@ -151,17 +180,14 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-bg p-4 relative overflow-hidden">
-      {/* Faint grid background */}
       <div className="landing-grid absolute inset-0 pointer-events-none" aria-hidden="true" />
       <div className="relative z-10 w-full max-w-md">
-        <div className="text-center mb-8">
+        <div className="text-center mb-6">
           <h1 className="text-3xl font-bold text-primary mb-2">9Router</h1>
-          <p className="text-text-muted">
-            {samlAvailable
-              ? "Sign in with SAML 2.0 Single Sign-On"
-              : oidcAvailable
-              ? "Sign in with your OIDC provider to access the dashboard"
-              : "Enter your password to access the dashboard"}
+          <p className="text-text-muted text-sm">
+            {mode === "signup"
+              ? "Create your account"
+              : "Sign in to access your organizations and models"}
           </p>
         </div>
 
@@ -188,81 +214,153 @@ export default function LoginPage() {
               </Button>
             </form>
           ) : (
-          <div className="flex flex-col gap-4">
-            {samlAvailable && (
-              <Button type="button" variant="primary" className="w-full" onClick={handleSamlLogin}>
-                {samlLoginLabel}
-              </Button>
-            )}
-
-            {oidcAvailable && (
-              <Button type="button" variant="primary" className="w-full" onClick={handleOidcLogin}>
-                {oidcLoginLabel}
-              </Button>
-            )}
-
-            {ssoAvailable && passwordAvailable && <div className="h-px bg-border/60" />}
-
-            {passwordAvailable ? (
-              <form onSubmit={handleLogin} className="flex flex-col gap-4">
-                {isSsoEnabled && !ssoAvailable && (
-                  <p className="text-xs text-amber-600 dark:text-amber-400 text-center">
-                    {activeSsoType === "saml" ? "SAML SSO" : "OIDC"} login is enabled, but configuration is incomplete. Password login is still available for recovery.
-                  </p>
-                )}
-
-                {authMode === "both" && ssoAvailable && (
-                  <p className="text-xs text-text-muted text-center">
-                    Password and {activeSsoType === "saml" ? "SAML SSO" : "OIDC"} login are both enabled.
-                  </p>
-                )}
-
-                <div className="flex flex-col gap-2">
-                  <label className="text-sm font-medium">Password</label>
-                  <Input
-                    type="password"
-                    placeholder="Enter password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                    autoFocus={!oidcAvailable}
-                  />
-                  {error && <p className="text-xs text-red-500">{error}</p>}
-                  {retryAfter > 0 && (
-                    <p className="text-xs text-amber-600 dark:text-amber-400">
-                      Locked. Retry in <span className="font-mono">{retryAfter}s</span>.
-                    </p>
-                  )}
-                  {resetHint && (
-                    <p className="text-xs text-text-muted">
-                      Forgot password? Open <code className="bg-sidebar px-1 rounded">9router</code> CLI on the host → <b>Settings</b> → <b>Reset Password to Default</b>.
-                    </p>
-                  )}
-                </div>
-
-                <Button
-                  type="submit"
-                  variant="primary"
-                  className="w-full"
-                  loading={loading}
-                  disabled={retryAfter > 0}
+            <div className="flex flex-col gap-4">
+              {/* Tab Switcher */}
+              <div className="flex rounded-lg bg-surface-subtle p-1 border border-border-subtle">
+                <button
+                  type="button"
+                  onClick={() => { setMode("login"); setError(""); }}
+                  className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-colors ${
+                    mode === "login"
+                      ? "bg-surface text-text-main shadow-sm"
+                      : "text-text-muted hover:text-text-main"
+                  }`}
                 >
-                  {retryAfter > 0 ? `Wait ${retryAfter}s` : "Login"}
-                </Button>
+                  Sign In
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setMode("signup"); setError(""); }}
+                  className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-colors ${
+                    mode === "signup"
+                      ? "bg-surface text-text-main shadow-sm"
+                      : "text-text-muted hover:text-text-main"
+                  }`}
+                >
+                  Sign Up
+                </button>
+              </div>
 
-                <p className="text-xs text-center text-text-muted mt-2">
-                  Default password is <code className="bg-sidebar px-1 rounded">123456</code>
-                </p>
-                {hasPassword === false && (
-                  <p className="text-xs text-center text-amber-600 dark:text-amber-400">
-                    Security risk: no password set. You will be asked to set one when logging in remotely.
-                  </p>
-                )}
-              </form>
-            ) : (
-              error && <p className="text-xs text-red-500">{error}</p>
-            )}
-          </div>
+              {mode === "login" ? (
+                <>
+                  {samlAvailable && (
+                    <Button type="button" variant="primary" className="w-full" onClick={handleSamlLogin}>
+                      {samlLoginLabel}
+                    </Button>
+                  )}
+
+                  {oidcAvailable && (
+                    <Button type="button" variant="primary" className="w-full" onClick={handleOidcLogin}>
+                      {oidcLoginLabel}
+                    </Button>
+                  )}
+
+                  {ssoAvailable && passwordAvailable && <div className="h-px bg-border/60" />}
+
+                  {passwordAvailable && (
+                    <form onSubmit={handleLogin} className="flex flex-col gap-3">
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-xs font-medium text-text-muted">Email or Username</label>
+                        <Input
+                          type="text"
+                          placeholder="admin or user@example.com"
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          autoFocus
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-xs font-medium text-text-muted">Password</label>
+                        <Input
+                          type="password"
+                          placeholder="Enter password"
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          required
+                        />
+                        {error && <p className="text-xs text-red-500 mt-1">{error}</p>}
+                        {retryAfter > 0 && (
+                          <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                            Locked. Retry in <span className="font-mono">{retryAfter}s</span>.
+                          </p>
+                        )}
+                        {resetHint && (
+                          <p className="text-xs text-text-muted mt-1">{resetHint}</p>
+                        )}
+                      </div>
+
+                      <Button
+                        type="submit"
+                        variant="primary"
+                        className="w-full mt-2"
+                        loading={loading}
+                        disabled={retryAfter > 0}
+                      >
+                        {retryAfter > 0 ? `Wait ${retryAfter}s` : "Sign In"}
+                      </Button>
+                    </form>
+                  )}
+                </>
+              ) : (
+                /* Sign Up Form */
+                <form onSubmit={handleSignup} className="flex flex-col gap-3">
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-medium text-text-muted">Email Address *</label>
+                    <Input
+                      type="email"
+                      placeholder="user@example.com"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      required
+                      autoFocus
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-medium text-text-muted">Display Name</label>
+                    <Input
+                      type="text"
+                      placeholder="Your Name"
+                      value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-medium text-text-muted">Password * (min 6 chars)</label>
+                    <Input
+                      type="password"
+                      placeholder="Choose a secure password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-medium text-text-muted">Invitation Code (Optional)</label>
+                    <Input
+                      type="text"
+                      placeholder="Enter invitation code if you have one"
+                      value={invitationCode}
+                      onChange={(e) => setInvitationCode(e.target.value)}
+                    />
+                  </div>
+
+                  {error && <p className="text-xs text-red-500 mt-1">{error}</p>}
+
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    className="w-full mt-2"
+                    loading={loading}
+                  >
+                    Create Account
+                  </Button>
+                </form>
+              )}
+            </div>
           )}
         </Card>
       </div>

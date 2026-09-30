@@ -5,6 +5,7 @@ import {
   updateProviderConnection,
   deleteProviderConnection,
 } from "@/models";
+import { resolveCallerContext } from "@/lib/auth/rbac";
 
 function normalizeProxyConfig(body = {}) {
   const hasAnyProxyField =
@@ -63,7 +64,8 @@ function shouldMergeProviderSpecificData(existing, incoming, hasLegacyProxy, has
 export async function GET(request, { params }) {
   try {
     const { id } = await params;
-    const connection = await getProviderConnectionById(id);
+    const ctx = await resolveCallerContext(request);
+    const connection = await getProviderConnectionById(id, ctx);
 
     if (!connection) {
       return NextResponse.json({ error: "Connection not found" }, { status: 404 });
@@ -101,7 +103,8 @@ export async function PUT(request, { params }) {
       providerSpecificData
     } = body;
 
-    const existing = await getProviderConnectionById(id);
+    const ctx = await resolveCallerContext(request);
+    const existing = await getProviderConnectionById(id, ctx);
     if (!existing) {
       return NextResponse.json({ error: "Connection not found" }, { status: 404 });
     }
@@ -155,7 +158,10 @@ export async function PUT(request, { params }) {
       }
     }
 
-    const updated = await updateProviderConnection(id, updateData);
+    const updated = await updateProviderConnection(id, updateData, ctx);
+    if (!updated) {
+      return NextResponse.json({ error: "Failed to update connection or unauthorized" }, { status: 403 });
+    }
 
     // Hide sensitive fields
     const result = { ...updated };
@@ -166,6 +172,9 @@ export async function PUT(request, { params }) {
 
     return NextResponse.json({ connection: result });
   } catch (error) {
+    if (error?.code === "FORBIDDEN") {
+      return NextResponse.json({ error: error.message }, { status: 403 });
+    }
     console.log("Error updating connection:", error);
     return NextResponse.json({ error: "Failed to update connection" }, { status: 500 });
   }
@@ -175,14 +184,17 @@ export async function PUT(request, { params }) {
 export async function DELETE(request, { params }) {
   try {
     const { id } = await params;
-
-    const deleted = await deleteProviderConnection(id);
+    const ctx = await resolveCallerContext(request);
+    const deleted = await deleteProviderConnection(id, ctx);
     if (!deleted) {
-      return NextResponse.json({ error: "Connection not found" }, { status: 404 });
+      return NextResponse.json({ error: "Connection not found or unauthorized" }, { status: 404 });
     }
 
     return NextResponse.json({ message: "Connection deleted successfully" });
   } catch (error) {
+    if (error?.code === "FORBIDDEN") {
+      return NextResponse.json({ error: error.message }, { status: 403 });
+    }
     console.log("Error deleting connection:", error);
     return NextResponse.json({ error: "Failed to delete connection" }, { status: 500 });
   }

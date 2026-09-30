@@ -2,6 +2,7 @@ import {
   extractApiKey, isValidApiKey,
   getProviderCredentials, markAccountUnavailable,
 } from "../services/auth.js";
+import { resolveCallerContext } from "@/lib/auth/rbac";
 import { getSettings, getCustomModels } from "@/lib/localDb";
 import { getModelInfo } from "../services/model.js";
 import { handleSttCore } from "open-sse/handlers/sttCore.js";
@@ -75,9 +76,10 @@ export async function handleStt(request) {
   const excludeConnectionIds = new Set();
   let lastError = null;
   let lastStatus = null;
+  const callerContext = await resolveCallerContext(request);
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model);
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { callerContext });
 
     if (!credentials || credentials.allRateLimited) {
       if (credentials?.allRateLimited) {

@@ -29,8 +29,42 @@ export {
 
 // API keys
 export {
-  getApiKeys, getApiKeyById, createApiKey, updateApiKey, deleteApiKey, validateApiKey,
+  getApiKeys, getApiKeyById, getApiKeyByKey, createApiKey, updateApiKey, deleteApiKey, validateApiKey,
 } from "./repos/apiKeysRepo.js";
+
+// Organizations (Multi-Tenancy)
+export {
+  getOrganizations, getOrganizationsForUser, getOrganizationById,
+  createOrganization, updateOrganization, setOrganizationStatus, deleteOrganization,
+} from "./repos/organizationsRepo.js";
+
+// Users (Multi-Tenancy)
+export {
+  getUserById, getUserByEmail, createUser, updateUser,
+  recordUserLogin, verifyUserPassword, upsertSsoUser,
+} from "./repos/usersRepo.js";
+
+// Org Memberships (Multi-Tenancy)
+export {
+  getMembershipsForUser, getMembershipsForOrg, getMembership,
+  addMembership, updateMembershipRole, removeMembership,
+} from "./repos/membershipsRepo.js";
+
+// Org Invitations (Multi-Tenancy)
+export {
+  createInvitation, getInvitationByCode, getInvitationsForOrg,
+  redeemInvitation, revokeInvitation,
+} from "./repos/invitationsRepo.js";
+
+// Superadmins (Multi-Tenancy)
+export {
+  getSuperadminByUsername, verifySuperadminPassword, updateSuperadminPassword, seedSuperadmin,
+} from "./repos/superadminsRepo.js";
+
+// Org Settings (Multi-Tenancy)
+export {
+  getOrgSettings, updateOrgSettings, deleteOrgSettings,
+} from "./repos/orgSettingsRepo.js";
 
 // Combos
 export {
@@ -59,7 +93,7 @@ export {
 export {
   statsEmitter, trackPendingRequest, getActiveRequests,
   saveRequestUsage, getUsageHistory, getUsageStats, getChartData,
-  appendRequestLog, getRecentLogs,
+  appendRequestLog, getRecentLogs, getOrgCurrentMonthlySpend,
 } from "./repos/usageRepo.js";
 
 // Request details

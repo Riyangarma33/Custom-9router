@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { DATA_DIR } from "@/lib/dataDir";
-import { getSettings } from "@/lib/localDb";
+import { getSettings, verifySuperadminPassword } from "@/lib/localDb";
 
 const DEFAULT_PASSWORD = "123456";
 const SESSION_MAX_AGE_SEC = 24 * 60 * 60;
@@ -30,8 +30,17 @@ export function shouldUseSecureCookie(request) {
   return forceSecureCookie || isHttpsRequest;
 }
 
+/**
+ * Creates a JWT token for the dashboard session.
+ * For users: { userId, email, displayName, activeOrgId, role }
+ * For superadmins: { isSuperadmin: true, username: 'admin' }
+ */
 export async function createDashboardAuthToken(claims = {}) {
-  return new SignJWT({ authenticated: true, ...claims })
+  const payload = {
+    authenticated: true,
+    ...claims,
+  };
+  return new SignJWT(payload)
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("24h")
@@ -58,6 +67,37 @@ export async function getDashboardAuthSession(token) {
   }
 }
 
+/**
+ * Extracts and verifies session from an incoming Request (via cookie or Authorization header).
+ */
+export async function getSessionFromRequest(request) {
+  if (!request) return null;
+
+  // 1. Check cookies
+  let token = null;
+  try {
+    token = request.cookies?.get?.("auth_token")?.value;
+  } catch {}
+
+  // 2. Check Authorization header
+  if (!token) {
+    const authHeader = request.headers?.get?.("Authorization") || request.headers?.get?.("authorization");
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      token = authHeader.slice(7).trim();
+    }
+  }
+
+  // 3. Check Cookie header string directly if cookies obj not parsed
+  if (!token) {
+    const cookieHeader = request.headers?.get?.("cookie") || "";
+    const match = cookieHeader.match(/auth_token=([^;]+)/);
+    if (match) token = decodeURIComponent(match[1]);
+  }
+
+  if (!token) return null;
+  return getDashboardAuthSession(token);
+}
+
 export async function setDashboardAuthCookie(cookieStore, request, claims = {}) {
   const token = await createDashboardAuthToken(claims);
   cookieStore.set("auth_token", token, {
@@ -67,18 +107,28 @@ export async function setDashboardAuthCookie(cookieStore, request, claims = {}) 
     path: "/",
     maxAge: SESSION_MAX_AGE_SEC,
   });
+  return token;
 }
 
 export function clearDashboardAuthCookie(cookieStore) {
   cookieStore.delete("auth_token");
 }
 
-// Verify the current dashboard password (re-auth for sensitive actions).
+// Verify dashboard password (superadmin or local settings fallback).
 export async function verifyDashboardPassword(password) {
   if (typeof password !== "string" || !password) return false;
+
+  // Check superadmin first
+  try {
+    const isSuper = await verifySuperadminPassword("admin", password);
+    if (isSuper) return true;
+  } catch {}
+
+  // Fallback to settings password
   const settings = await getSettings();
   const storedHash = settings?.password;
   if (storedHash) return bcrypt.compare(password, storedHash);
+
   const initialPassword = process.env.INITIAL_PASSWORD || DEFAULT_PASSWORD;
   return password === initialPassword;
 }

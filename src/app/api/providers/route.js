@@ -6,6 +6,7 @@ import {
   getProviderNodes,
   getProxyPoolById,
 } from "@/models";
+import { resolveCallerContext } from "@/lib/auth/rbac";
 import { APIKEY_PROVIDERS } from "@/shared/constants/config";
 import { AI_PROVIDERS, FREE_TIER_PROVIDERS, WEB_COOKIE_PROVIDERS, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, isCustomEmbeddingProvider } from "@/shared/constants/providers";
 import { normalizeProviderId, normalizeProviderSpecificData } from "@/lib/providerNormalization";
@@ -46,10 +47,26 @@ async function normalizeProxyPoolId(proxyPoolId) {
   return { proxyPoolId: normalizedId };
 }
 
-// GET /api/providers - List all connections
-export async function GET() {
+// GET /api/providers - List all connections scoped to caller's organization
+export async function GET(request) {
   try {
-    const connections = await getProviderConnections();
+    const ctx = await resolveCallerContext(request);
+    let filter = {};
+    if (request?.url) {
+      const url = new URL(request.url);
+      const orgIdParam = url.searchParams.get("orgId");
+      if (ctx.isSuperadmin) {
+        if (orgIdParam) filter.org_id = orgIdParam;
+      } else {
+        filter.accessibleBy = {
+          userId: ctx.userId,
+          orgId: ctx.orgId || "org_default",
+          isSuperadmin: false,
+        };
+      }
+    }
+
+    const connections = await getProviderConnections(filter);
 
     // Build nodeNameMap for compatible providers (id → name)
     let nodeNameMap = {};
@@ -172,6 +189,10 @@ export async function POST(request) {
       mergedProviderSpecificData.proxyPoolId = proxyPoolId;
     }
 
+    const ctx = await resolveCallerContext(request);
+    const isOrgAdmin = ctx.isSuperadmin || ctx.role === "org_admin";
+    const isShared = (body.is_org_shared === true || body.isOrgShared === true) && isOrgAdmin;
+
     const newConnection = await createProviderConnection({
       provider,
       authType: isWebCookieProvider ? "cookie" : "apikey",
@@ -180,6 +201,9 @@ export async function POST(request) {
       priority: priority || 1,
       globalPriority: globalPriority || null,
       defaultModel: defaultModel || null,
+      owner_user_id: ctx.userId || null,
+      org_id: ctx.orgId || "org_default",
+      is_org_shared: isShared ? 1 : 0,
       providerSpecificData: mergedProviderSpecificData,
       isActive: true,
       testStatus: testStatus || "unknown",

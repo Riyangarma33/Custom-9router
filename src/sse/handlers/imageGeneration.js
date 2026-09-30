@@ -5,6 +5,7 @@ import {
   extractApiKey,
   isValidApiKey,
 } from "../services/auth.js";
+import { resolveCallerContext } from "@/lib/auth/rbac";
 import { getSettings } from "@/lib/localDb";
 import { getModelInfo, getComboModels } from "../services/model.js";
 import { handleImageGenerationCore } from "open-sse/handlers/imageGenerationCore.js";
@@ -89,9 +90,10 @@ async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutpu
   const excludeConnectionIds = new Set();
   let lastError = null;
   let lastStatus = null;
+  const callerContext = await resolveCallerContext(request);
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { preferredConnectionId });
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { preferredConnectionId, callerContext });
 
     if (!credentials || credentials.allRateLimited) {
       if (credentials?.allRateLimited) {

@@ -5,6 +5,7 @@ import {
   extractApiKey,
   isValidApiKey,
 } from "../services/auth.js";
+import { resolveCallerContext } from "@/lib/auth/rbac";
 import { getSettings, getProviderConnectionById } from "@/lib/localDb";
 import { getModelInfo } from "../services/model.js";
 import { handleVideoProxyCore, getVideoConfig, sanitizeSecrets } from "open-sse/handlers/videoCore.js";
@@ -130,9 +131,10 @@ export async function handleVideoCreate(request, action) {
   const excludeConnectionIds = new Set();
   let lastError = null;
   let lastStatus = null;
+  const callerContext = await resolveCallerContext(request);
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { preferredConnectionId });
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { preferredConnectionId, callerContext });
 
     if (!credentials || credentials.allRateLimited) {
       if (credentials?.allRateLimited) {

@@ -1,8 +1,17 @@
-import { machineIdSync } from 'node-machine-id';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
 import { DATA_DIR } from '@/lib/dataDir';
+
+const require = createRequire(import.meta.url);
+let machineIdSync;
+try {
+  const mod = require('node-machine-id');
+  machineIdSync = mod.machineIdSync || mod;
+} catch {
+  machineIdSync = () => crypto.randomUUID();
+}
 
 const MACHINE_ID_FILE = path.join(DATA_DIR, 'machine-id');
 const AUTH_DIR = path.join(DATA_DIR, 'auth');

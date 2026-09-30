@@ -10,6 +10,8 @@ import {
 } from "@/lib/auth/saml.js";
 import { setDashboardAuthCookie } from "@/lib/auth/dashboardSession";
 import { checkLock, recordFail, recordSuccess, getClientIp } from "@/lib/auth/loginLimiter";
+import { upsertSsoUser } from "@/lib/db/repos/usersRepo.js";
+import { getMembershipsForUser } from "@/lib/db/repos/membershipsRepo.js";
 
 export async function POST(request) {
   const settings = await getSettings();
@@ -48,12 +50,30 @@ export async function POST(request) {
 
     const profile = await validateSamlResponse(request, { SAMLResponse }, storedRequestId, settings);
 
-    const samlEmail = pickSamlEmail(profile, settings) || null;
+    const samlEmail = pickSamlEmail(profile, settings) || "saml-user@saml.local";
     const samlName = pickSamlDisplayName(profile, settings) || "SAML user";
 
     recordSuccess(ip);
 
+    // Persist real user row in users table
+    const user = await upsertSsoUser({
+      email: samlEmail,
+      displayName: samlName,
+      authSource: "saml",
+    });
+
+    // Check user org memberships
+    const memberships = await getMembershipsForUser(user.id);
+    const firstOrg = memberships[0] || null;
+    const activeOrgId = firstOrg ? firstOrg.orgId : null;
+    const role = firstOrg ? firstOrg.role : "member";
+
     await setDashboardAuthCookie(cookieStore, request, {
+      userId: user.id,
+      email: user.email,
+      displayName: user.display_name,
+      activeOrgId,
+      role,
       saml: true,
       samlEmail,
       samlName,

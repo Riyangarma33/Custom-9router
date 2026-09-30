@@ -5,6 +5,7 @@ import {
   extractApiKey,
   isValidApiKey,
 } from "../services/auth.js";
+import { resolveCallerContext } from "@/lib/auth/rbac";
 import { getSettings } from "@/lib/localDb";
 import { getModelInfo } from "../services/model.js";
 import { handleEmbeddingsCore } from "open-sse/handlers/embeddingsCore.js";
@@ -93,9 +94,10 @@ export async function handleEmbeddings(request) {
   const excludeConnectionIds = new Set();
   let lastError = null;
   let lastStatus = null;
+  const callerContext = await resolveCallerContext(request);
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model);
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { callerContext });
 
     // All accounts unavailable
     if (!credentials || credentials.allRateLimited) {

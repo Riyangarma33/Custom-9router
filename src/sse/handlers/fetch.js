@@ -5,6 +5,7 @@ import {
   extractApiKey,
   isValidApiKey,
 } from "../services/auth.js";
+import { resolveCallerContext } from "@/lib/auth/rbac";
 import { getSettings, getCombos } from "@/lib/localDb";
 import { AI_PROVIDERS, resolveProviderId } from "@/shared/constants/providers.js";
 import { handleFetchCore } from "open-sse/handlers/fetch/index.js";
@@ -163,9 +164,10 @@ async function handleSingleProviderFetch(body, providerInput, request, apiKey, s
   // Ollama use the same connection for chat and fetch, so an upstream fetch
   // failure must not take the account offline for LLM requests.
   const fetchLockKey = `webfetch:${providerId}`;
+  const callerContext = await resolveCallerContext(request);
 
   while (true) {
-    const credentials = await getProviderCredentials(providerId, excludeConnectionIds, fetchLockKey);
+    const credentials = await getProviderCredentials(providerId, excludeConnectionIds, fetchLockKey, { callerContext });
 
     if (!credentials || credentials.allRateLimited) {
       if (credentials?.allRateLimited) {

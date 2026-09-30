@@ -2,13 +2,16 @@ import { NextResponse } from "next/server";
 import { getSettings } from "@/lib/localDb";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
-import { setDashboardAuthCookie } from "@/lib/auth/dashboardSession";
+import { setDashboardAuthCookie, createDashboardAuthToken } from "@/lib/auth/dashboardSession";
 import { isOidcConfigured } from "@/lib/auth/oidc";
 import { isSamlConfigured } from "@/lib/auth/saml.js";
 import { checkLock, recordFail, recordSuccess, getClientIp } from "@/lib/auth/loginLimiter";
 import { isLocalRequest } from "@/dashboardGuard";
+import { verifyUserPassword, recordUserLogin } from "@/lib/db/repos/usersRepo.js";
+import { getMembershipsForUser } from "@/lib/db/repos/membershipsRepo.js";
+import { verifySuperadminPassword, getSuperadminByUsername } from "@/lib/db/repos/superadminsRepo.js";
 
-const RESET_HINT = "Forgot password? Reset to default via 9Router CLI → Settings → Reset Password to Default.";
+const RESET_HINT = "Forgot password? Reset via CLI or contact platform administrator.";
 const NO_STORE_HEADERS = { "Cache-Control": "no-store" };
 
 function isTunnelRequest(request, settings) {
@@ -29,7 +32,13 @@ export async function POST(request) {
       );
     }
 
-    const { password } = await request.json();
+    const body = await request.json();
+    const { email, username, password } = body || {};
+
+    if (!password) {
+      return NextResponse.json({ error: "Password is required" }, { status: 400 });
+    }
+
     const settings = await getSettings();
 
     // Block login via tunnel/tailscale if dashboard access is disabled
@@ -37,62 +46,123 @@ export async function POST(request) {
       return NextResponse.json({ error: "Dashboard access via tunnel is disabled" }, { status: 403 });
     }
 
-    // Default password is '123456' if not set
-    const storedHash = settings.password;
+    const identifier = (email || username || "").trim();
 
-    if (settings.authMode === "sso" || settings.authMode === "saml" || settings.authMode === "oidc") {
-      const ssoType = settings.ssoType || (settings.authMode === "saml" ? "saml" : "oidc");
-      if (ssoType === "saml" && isSamlConfigured(settings)) {
-        return NextResponse.json({ error: "Password login is disabled. Use SAML SSO sign in." }, { status: 403 });
-      }
-      if (ssoType === "oidc" && isOidcConfigured(settings)) {
-        return NextResponse.json({ error: "Password login is disabled. Use OIDC sign in." }, { status: 403 });
+    // 1. Try User Login (email + password)
+    if (identifier && identifier.includes("@")) {
+      const user = await verifyUserPassword(identifier, password);
+      if (user) {
+        recordSuccess(ip);
+        await recordUserLogin(user.id);
+
+        const memberships = await getMembershipsForUser(user.id);
+        const firstOrg = memberships[0] || null;
+        const activeOrgId = firstOrg ? firstOrg.orgId : null;
+        const role = firstOrg ? firstOrg.role : "member";
+
+        const claims = {
+          userId: user.id,
+          email: user.email,
+          displayName: user.display_name,
+          activeOrgId,
+          role,
+        };
+
+        let token = null;
+        try {
+          const cookieStore = await cookies();
+          token = await setDashboardAuthCookie(cookieStore, request, claims);
+        } catch {
+          token = await createDashboardAuthToken(claims);
+        }
+
+        return NextResponse.json(
+          {
+            success: true,
+            isSuperadmin: false,
+            token,
+            user: { id: user.id, email: user.email, displayName: user.display_name },
+            activeOrgId,
+            role,
+            organizations: memberships.map((m) => ({
+              id: m.orgId,
+              name: m.orgName,
+              role: m.role,
+              status: m.orgStatus,
+            })),
+            mustChangePassword: false,
+          },
+          { headers: NO_STORE_HEADERS }
+        );
       }
     }
 
-    let isValid = false;
-    if (storedHash) {
-      isValid = await bcrypt.compare(password, storedHash);
-    } else {
-      // Use env var or default
-      const initialPassword = process.env.INITIAL_PASSWORD || "123456";
-      isValid = password === initialPassword;
+    // 2. Superadmin or Single-Field Password Login
+    let isSuperadminValid = false;
+    if (!identifier || identifier.toLowerCase() === "admin") {
+      isSuperadminValid = await verifySuperadminPassword("admin", password);
     }
 
-    if (isValid) {
+    // Fallback: check stored settings password if superadmin password failed and no identifier
+    if (!isSuperadminValid && !identifier && settings.password) {
+      isSuperadminValid = await bcrypt.compare(password, settings.password);
+    }
+
+    // Fallback: check initial password
+    if (!isSuperadminValid && !identifier && !settings.password) {
+      const initialPassword = process.env.SUPERADMIN_PASSWORD || process.env.INITIAL_PASSWORD || "123456";
+      isSuperadminValid = (password === initialPassword);
+    }
+
+    if (isSuperadminValid) {
       recordSuccess(ip);
 
-      // Default password still in use on a remote client → force a password
-      // change before the dashboard is exposed remotely (keeps local UX intact).
+      // CVE-2026-56679 mitigation: Default password still in use on remote client
+      const superadminRecord = await getSuperadminByUsername("admin");
+      const defaultPasswordUsed = password === "123456";
       const mustChangePassword =
-        !storedHash && !process.env.INITIAL_PASSWORD && !isLocalRequest(request);
+        defaultPasswordUsed &&
+        !process.env.INITIAL_PASSWORD &&
+        !process.env.SUPERADMIN_PASSWORD &&
+        !isLocalRequest(request);
 
       if (mustChangePassword) {
-        // Do NOT issue a session token: a fresh install's default password is
-        // public knowledge ("123456"), so handing out a valid JWT would let any
-        // remote attacker authenticate and (e.g.) PATCH /api/settings to disable
-        // authentication entirely (CVE-2026-56679 class). Require the password
-        // to be changed first.
-        //
-        // NOTE: this intentionally leaves no remote self-service password-change
-        // path — the change-password flow (PATCH /api/settings) requires a JWT,
-        // which we deliberately withhold. A remote fresh-install user must either
-        // change the password from the local machine or set INITIAL_PASSWORD
-        // before first launch. This is a deliberate security trade-off, not an
-        // oversight: issuing any credential before the default password is
-        // rotated re-opens the exact attack chain this branch closes.
         return NextResponse.json(
-          { success: false, error: "Default password must be changed before remote access. Change it from the local machine (or set INITIAL_PASSWORD).", mustChangePassword },
+          {
+            success: false,
+            error: "Default password must be changed before remote access. Change it from the local machine (or set INITIAL_PASSWORD).",
+            mustChangePassword: true,
+          },
           { status: 403, headers: NO_STORE_HEADERS }
         );
       }
 
-      const cookieStore = await cookies();
-      await setDashboardAuthCookie(cookieStore, request);
+      const adminClaims = {
+        isSuperadmin: true,
+        username: "admin",
+      };
 
-      return NextResponse.json({ success: true, mustChangePassword: false }, { headers: NO_STORE_HEADERS });
+      let token = null;
+      try {
+        const cookieStore = await cookies();
+        token = await setDashboardAuthCookie(cookieStore, request, adminClaims);
+      } catch {
+        token = await createDashboardAuthToken(adminClaims);
+      }
+
+      return NextResponse.json(
+        {
+          success: true,
+          isSuperadmin: true,
+          username: "admin",
+          token,
+          mustChangePassword: false,
+        },
+        { headers: NO_STORE_HEADERS }
+      );
     }
 
+    // Login failed
     const { remainingBeforeLock } = recordFail(ip);
     const postLock = checkLock(ip);
     if (postLock.locked) {
@@ -101,11 +171,12 @@ export async function POST(request) {
         { status: 429, headers: { "Retry-After": String(postLock.retryAfter) } }
       );
     }
+
     return NextResponse.json(
-      { error: `Invalid password. ${remainingBeforeLock} attempt(s) left before lockout.`, remainingBeforeLock },
+      { error: `Invalid credentials. ${remainingBeforeLock} attempt(s) left before lockout.`, remainingBeforeLock },
       { status: 401 }
     );
   } catch (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: error.message || "Login failed" }, { status: 500 });
   }
 }

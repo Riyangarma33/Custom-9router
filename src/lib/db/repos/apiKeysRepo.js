@@ -8,14 +8,29 @@ function rowToKey(row) {
     key: row.key,
     name: row.name,
     machineId: row.machineId,
+    user_id: row.user_id || null,
+    org_id: row.org_id || null,
     isActive: row.isActive === 1 || row.isActive === true,
     createdAt: row.createdAt,
   };
 }
 
-export async function getApiKeys() {
+export async function getApiKeys(filter = {}) {
   const db = await getAdapter();
-  const rows = db.all(`SELECT * FROM apiKeys ORDER BY createdAt ASC`);
+  const where = [];
+  const params = [];
+
+  if (filter.org_id) {
+    where.push("org_id = ?");
+    params.push(filter.org_id);
+  }
+  if (filter.user_id) {
+    where.push("user_id = ?");
+    params.push(filter.user_id);
+  }
+
+  const sql = `SELECT * FROM apiKeys${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY createdAt ASC`;
+  const rows = db.all(sql, params);
   return rows.map(rowToKey);
 }
 
@@ -25,7 +40,14 @@ export async function getApiKeyById(id) {
   return rowToKey(row);
 }
 
-export async function createApiKey(name, machineId) {
+export async function getApiKeyByKey(key) {
+  if (!key) return null;
+  const db = await getAdapter();
+  const row = db.get(`SELECT * FROM apiKeys WHERE key = ?`, [key]);
+  return rowToKey(row);
+}
+
+export async function createApiKey(name, machineId, options = {}) {
   if (!machineId) throw new Error("machineId is required");
   const db = await getAdapter();
   const { generateApiKeyWithMachine } = await import("@/shared/utils/apiKey");
@@ -35,12 +57,24 @@ export async function createApiKey(name, machineId) {
     name,
     key: result.key,
     machineId,
+    user_id: options.userId || options.user_id || null,
+    org_id: options.orgId || options.org_id || "org_default",
     isActive: true,
     createdAt: new Date().toISOString(),
   };
   db.run(
-    `INSERT INTO apiKeys(id, key, name, machineId, isActive, createdAt) VALUES(?, ?, ?, ?, ?, ?)`,
-    [apiKey.id, apiKey.key, apiKey.name, apiKey.machineId, 1, apiKey.createdAt]
+    `INSERT INTO apiKeys(id, key, name, machineId, user_id, org_id, isActive, createdAt)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      apiKey.id,
+      apiKey.key,
+      apiKey.name,
+      apiKey.machineId,
+      apiKey.user_id,
+      apiKey.org_id,
+      1,
+      apiKey.createdAt,
+    ]
   );
   return apiKey;
 }
@@ -53,8 +87,16 @@ export async function updateApiKey(id, data) {
     if (!row) return;
     const merged = { ...rowToKey(row), ...data };
     db.run(
-      `UPDATE apiKeys SET key = ?, name = ?, machineId = ?, isActive = ? WHERE id = ?`,
-      [merged.key, merged.name, merged.machineId, merged.isActive ? 1 : 0, id]
+      `UPDATE apiKeys SET key = ?, name = ?, machineId = ?, user_id = ?, org_id = ?, isActive = ? WHERE id = ?`,
+      [
+        merged.key,
+        merged.name,
+        merged.machineId,
+        merged.user_id,
+        merged.org_id,
+        merged.isActive ? 1 : 0,
+        id,
+      ]
     );
     result = merged;
   });

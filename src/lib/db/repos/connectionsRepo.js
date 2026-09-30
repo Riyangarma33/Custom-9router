@@ -8,6 +8,7 @@ const OPTIONAL_FIELDS = [
   "scope", "projectId", "apiKey", "testStatus",
   "lastTested", "lastError", "lastErrorAt", "rateLimitedUntil", "expiresIn", "errorCode",
   "consecutiveUseCount", "idToken", "lastRefreshAt",
+  "owner_user_id", "org_id", "is_org_shared",
 ];
 
 const MODEL_LOCK_PREFIX = "modelLock_";
@@ -44,13 +45,20 @@ function rowToConn(row) {
     email: row.email,
     priority: row.priority,
     isActive: row.isActive === 1 || row.isActive === true,
+    owner_user_id: row.owner_user_id || null,
+    org_id: row.org_id || null,
+    is_org_shared: row.is_org_shared === 1 || row.is_org_shared === true,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
 }
 
 function connToRow(c) {
-  const { id, provider, authType, name, email, priority, isActive, createdAt, updatedAt, ...rest } = c;
+  const {
+    id, provider, authType, name, email, priority, isActive,
+    owner_user_id, org_id, is_org_shared,
+    createdAt, updatedAt, ...rest
+  } = c;
   return {
     id,
     provider,
@@ -59,6 +67,9 @@ function connToRow(c) {
     email: email ?? null,
     priority: priority ?? null,
     isActive: isActive === false ? 0 : 1,
+    owner_user_id: owner_user_id ?? null,
+    org_id: org_id ?? null,
+    is_org_shared: is_org_shared ? 1 : 0,
     data: stringifyJson(rest),
     createdAt,
     updatedAt,
@@ -68,13 +79,17 @@ function connToRow(c) {
 function upsert(db, c) {
   const r = connToRow(c);
   db.run(
-    `INSERT INTO providerConnections(id, provider, authType, name, email, priority, isActive, data, createdAt, updatedAt)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO providerConnections(id, provider, authType, name, email, priority, isActive, owner_user_id, org_id, is_org_shared, data, createdAt, updatedAt)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        provider=excluded.provider, authType=excluded.authType, name=excluded.name,
        email=excluded.email, priority=excluded.priority, isActive=excluded.isActive,
+       owner_user_id=excluded.owner_user_id, org_id=excluded.org_id, is_org_shared=excluded.is_org_shared,
        data=excluded.data, updatedAt=excluded.updatedAt`,
-    [r.id, r.provider, r.authType, r.name, r.email, r.priority, r.isActive, r.data, r.createdAt, r.updatedAt]
+    [
+      r.id, r.provider, r.authType, r.name, r.email, r.priority, r.isActive,
+      r.owner_user_id, r.org_id, r.is_org_shared, r.data, r.createdAt, r.updatedAt,
+    ]
   );
 }
 
@@ -95,6 +110,25 @@ export async function getProviderConnections(filter = {}) {
   const params = [];
   if (filter.provider) { where.push("provider = ?"); params.push(filter.provider); }
   if (filter.isActive !== undefined) { where.push("isActive = ?"); params.push(filter.isActive ? 1 : 0); }
+  if (filter.org_id) { where.push("org_id = ?"); params.push(filter.org_id); }
+  if (filter.owner_user_id) { where.push("owner_user_id = ?"); params.push(filter.owner_user_id); }
+  if (filter.is_org_shared !== undefined) { where.push("is_org_shared = ?"); params.push(filter.is_org_shared ? 1 : 0); }
+
+  // Context-aware caller filtering:
+  // accessibleBy: { userId, orgId, isSuperadmin }
+  if (filter.accessibleBy) {
+    const { userId, orgId, isSuperadmin } = filter.accessibleBy;
+    if (!isSuperadmin && orgId) {
+      if (userId) {
+        where.push("(org_id = ? AND (owner_user_id = ? OR is_org_shared = 1))");
+        params.push(orgId, userId);
+      } else {
+        where.push("(org_id = ? AND is_org_shared = 1)");
+        params.push(orgId);
+      }
+    }
+  }
+
   const sql = `SELECT * FROM providerConnections${where.length ? ` WHERE ${where.join(" AND ")}` : ""}`;
   const rows = db.all(sql, params);
   const list = rows.map(rowToConn);
@@ -102,10 +136,22 @@ export async function getProviderConnections(filter = {}) {
   return list;
 }
 
-export async function getProviderConnectionById(id) {
+export async function getProviderConnectionById(id, context = null) {
   const db = await getAdapter();
   const row = db.get(`SELECT * FROM providerConnections WHERE id = ?`, [id]);
-  return rowToConn(row);
+  const conn = rowToConn(row);
+  if (!conn) return null;
+
+  if (context && !context.isSuperadmin) {
+    if (context.orgId && conn.org_id && conn.org_id !== context.orgId) {
+      return null;
+    }
+    if (!conn.is_org_shared && context.userId && conn.owner_user_id && conn.owner_user_id !== context.userId) {
+      return null;
+    }
+  }
+
+  return conn;
 }
 
 // Internal sync reorder — must be called INSIDE a transaction.
@@ -135,6 +181,9 @@ function reorderInTx(db, providerId) {
 export async function createProviderConnection(data) {
   const db = await getAdapter();
   const now = new Date().toISOString();
+  const orgId = data.org_id || "org_default";
+  const ownerUserId = data.owner_user_id || null;
+  const isOrgShared = data.is_org_shared ? 1 : 0;
   let result;
 
   db.transaction(() => {
@@ -143,15 +192,19 @@ export async function createProviderConnection(data) {
     // (O(pool) per key — the other half of the import cost in #4311). The oauth
     // branch below still scans, because its identity rules compare fields
     // inside providerSpecificData and have no single-column equivalent.
+    // Scoped by org_id so tenants never collide or conflict.
     const isApikey = data.authType === "apikey" && !!data.name;
     const all = isApikey
       ? db.all(
-          `SELECT * FROM providerConnections WHERE provider = ? AND authType = ? AND name = ?`,
-          [data.provider, "apikey", data.name]
+          `SELECT * FROM providerConnections WHERE provider = ? AND authType = ? AND name = ? AND org_id = ?`,
+          [data.provider, "apikey", data.name, orgId]
         ).map(rowToConn)
-      : db.all(`SELECT * FROM providerConnections WHERE provider = ?`, [data.provider]).map(rowToConn);
+      : db.all(
+          `SELECT * FROM providerConnections WHERE provider = ? AND org_id = ?`,
+          [data.provider, orgId]
+        ).map(rowToConn);
     const poolSize = isApikey
-      ? db.get(`SELECT COUNT(*) AS n FROM providerConnections WHERE provider = ?`, [data.provider])?.n ?? all.length
+      ? db.get(`SELECT COUNT(*) AS n FROM providerConnections WHERE provider = ? AND org_id = ?`, [data.provider, orgId])?.n ?? all.length
       : all.length;
 
     let existing = null;
@@ -210,7 +263,14 @@ export async function createProviderConnection(data) {
         throw err;
       }
       const normalized = resetHealthStateOnActivation(existing, data);
-      const merged = { ...existing, ...normalized, updatedAt: now };
+      const merged = {
+        ...existing,
+        ...normalized,
+        owner_user_id: ownerUserId ?? existing.owner_user_id,
+        org_id: orgId ?? existing.org_id,
+        is_org_shared: data.is_org_shared !== undefined ? isOrgShared : existing.is_org_shared,
+        updatedAt: now,
+      };
       upsert(db, merged);
       result = merged;
       return;
@@ -222,10 +282,11 @@ export async function createProviderConnection(data) {
     }
     let connectionPriority = data.priority;
     if (!connectionPriority) {
-      // MAX(priority)+1 in SQL rather than a reduce over the loaded pool: the
-      // apikey path no longer has the whole pool in memory, and the aggregate
-      // is served by the index instead of a row scan. #4311
-      const maxRow = db.get(`SELECT MAX(priority) AS m FROM providerConnections WHERE provider = ?`, [data.provider]);
+      // MAX(priority)+1 in SQL scoped to org_id
+      const maxRow = db.get(
+        `SELECT MAX(priority) AS m FROM providerConnections WHERE provider = ? AND org_id = ?`,
+        [data.provider, orgId]
+      );
       connectionPriority = (maxRow?.m || 0) + 1;
     }
 
@@ -236,6 +297,9 @@ export async function createProviderConnection(data) {
       name: connectionName,
       priority: connectionPriority,
       isActive: data.isActive !== undefined ? data.isActive : true,
+      owner_user_id: ownerUserId,
+      org_id: orgId,
+      is_org_shared: isOrgShared,
       createdAt: now,
       updatedAt: now,
     };
@@ -248,11 +312,6 @@ export async function createProviderConnection(data) {
     if (data.email !== undefined) conn.email = data.email;
 
     upsert(db, conn);
-    // No reorderInTx here. `conn.priority` is already MAX(priority)+1, so the
-    // row sorts last and the resulting order is what reorderInTx would have
-    // produced anyway. The rewrite cost ~2N statements per insert — O(pool) —
-    // which made a 5k-key import O(n*m): ~25M statements at a 5k pool, and it
-    // serialized every parallel writer on the same transaction. #4311
     result = conn;
   });
 
@@ -260,13 +319,33 @@ export async function createProviderConnection(data) {
 }
 
 // Critical: OAuth refresh token race — atomic merge inside transaction
-export async function updateProviderConnection(id, data) {
+export async function updateProviderConnection(id, data, context = null) {
   const db = await getAdapter();
   let result;
   db.transaction(() => {
     const row = db.get(`SELECT * FROM providerConnections WHERE id = ?`, [id]);
     if (!row) { result = null; return; }
     const existing = rowToConn(row);
+
+    if (context && !context.isSuperadmin) {
+      if (context.orgId && existing.org_id && existing.org_id !== context.orgId) {
+        const err = new Error("Connection not found or belongs to another organization");
+        err.code = "FORBIDDEN";
+        throw err;
+      }
+      if (existing.is_org_shared) {
+        if (context.role !== "org_admin") {
+          const err = new Error("Only org_admin can modify shared connections");
+          err.code = "FORBIDDEN";
+          throw err;
+        }
+      } else if (existing.owner_user_id && context.userId && existing.owner_user_id !== context.userId) {
+        const err = new Error("You do not own this connection");
+        err.code = "FORBIDDEN";
+        throw err;
+      }
+    }
+
     const normalized = resetHealthStateOnActivation(existing, data);
     const merged = { ...existing, ...normalized, updatedAt: new Date().toISOString() };
     upsert(db, merged);
@@ -276,14 +355,35 @@ export async function updateProviderConnection(id, data) {
   return result;
 }
 
-export async function deleteProviderConnection(id) {
+export async function deleteProviderConnection(id, context = null) {
   const db = await getAdapter();
   let ok = false;
   db.transaction(() => {
-    const row = db.get(`SELECT provider FROM providerConnections WHERE id = ?`, [id]);
+    const row = db.get(`SELECT * FROM providerConnections WHERE id = ?`, [id]);
     if (!row) return;
+    const existing = rowToConn(row);
+
+    if (context && !context.isSuperadmin) {
+      if (context.orgId && existing.org_id && existing.org_id !== context.orgId) {
+        const err = new Error("Connection belongs to another organization");
+        err.code = "FORBIDDEN";
+        throw err;
+      }
+      if (existing.is_org_shared) {
+        if (context.role !== "org_admin") {
+          const err = new Error("Only org_admin can delete shared connections");
+          err.code = "FORBIDDEN";
+          throw err;
+        }
+      } else if (existing.owner_user_id && context.userId && existing.owner_user_id !== context.userId) {
+        const err = new Error("You do not own this connection");
+        err.code = "FORBIDDEN";
+        throw err;
+      }
+    }
+
     db.run(`DELETE FROM providerConnections WHERE id = ?`, [id]);
-    reorderInTx(db, row.provider);
+    reorderInTx(db, existing.provider);
     ok = true;
   });
   return ok;

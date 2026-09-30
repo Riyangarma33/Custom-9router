@@ -183,6 +183,10 @@ export default function Header({ onMenuClick, showMenuButton = true }) {
   const pathname = usePathname();
   const [displayName, setDisplayName] = useState("");
   const [loginMethod, setLoginMethod] = useState("");
+  const [activeOrgId, setActiveOrgId] = useState("");
+  const [organizations, setOrganizations] = useState([]);
+  const [isSuperadmin, setIsSuperadmin] = useState(false);
+  const [role, setRole] = useState("");
   const [donateOpen, setDonateOpen] = useState(false);
 
   // Memoize page info to prevent unnecessary recalculations
@@ -200,11 +204,19 @@ export default function Header({ onMenuClick, showMenuButton = true }) {
         if (!cancelled) {
           setDisplayName(data?.displayName || data?.samlName || data?.samlEmail || data?.oidcName || data?.oidcEmail || "");
           setLoginMethod(data?.loginMethod || "");
+          setIsSuperadmin(!!data?.isSuperadmin);
+          setActiveOrgId(data?.activeOrgId || "");
+          setOrganizations(data?.organizations || []);
+          setRole(data?.role || "");
         }
       } catch {
         if (!cancelled) {
           setDisplayName("");
           setLoginMethod("");
+          setIsSuperadmin(false);
+          setActiveOrgId("");
+          setOrganizations([]);
+          setRole("");
         }
       }
     }
@@ -214,6 +226,21 @@ export default function Header({ onMenuClick, showMenuButton = true }) {
       cancelled = true;
     };
   }, []);
+
+  const handleOrgSwitch = async (newOrgId) => {
+    try {
+      const res = await fetch("/api/auth/org/switch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orgId: newOrgId }),
+      });
+      if (res.ok) {
+        window.location.reload();
+      }
+    } catch (err) {
+      console.error("Failed to switch organization:", err);
+    }
+  };
 
   const handleLogout = async () => {
     try {
@@ -302,7 +329,35 @@ export default function Header({ onMenuClick, showMenuButton = true }) {
       </div>
 
       {/* Right actions */}
-      <div className="flex items-center gap-1 shrink-0">
+      <div className="flex items-center gap-2 shrink-0">
+        {isSuperadmin ? (
+          <div className="hidden sm:flex items-center px-2.5 py-1 rounded-full border border-purple-500/30 bg-purple-500/10 text-xs font-medium text-purple-600 dark:text-purple-400">
+            <span className="material-symbols-outlined text-[15px] mr-1">shield_person</span>
+            <span>Superadmin</span>
+          </div>
+        ) : organizations.length > 1 ? (
+          <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-lg border border-border bg-surface text-xs">
+            <span className="material-symbols-outlined text-[15px] text-primary">domain</span>
+            <select
+              value={activeOrgId}
+              onChange={(e) => handleOrgSwitch(e.target.value)}
+              className="bg-transparent border-none text-xs font-medium text-text-main focus:outline-none cursor-pointer"
+            >
+              {organizations.map((org) => (
+                <option key={org.id} value={org.id}>
+                  {org.name} ({org.role})
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : organizations.length === 1 ? (
+          <div className="hidden sm:flex items-center px-2.5 py-1 rounded-full border border-border bg-surface/70 text-xs text-text-muted">
+            <span className="material-symbols-outlined text-[15px] mr-1 text-primary">domain</span>
+            <span className="font-medium text-text-main mr-1">{organizations[0].name}</span>
+            <span className="text-[10px] text-text-muted font-mono uppercase">({role})</span>
+          </div>
+        ) : null}
+
         {displayName && (loginMethod === "OIDC" || loginMethod === "SAML") && (
           <div
             className="hidden sm:flex items-center max-w-[220px] px-3 py-1.5 rounded-full border border-border bg-surface/70 text-xs text-text-muted truncate"

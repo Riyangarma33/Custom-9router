@@ -81,11 +81,9 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     const isAntigravity = providerId === "antigravity";
     const antigravityQuotaCache = isAntigravity && model ? getAntigravityQuotaCache() : null;
 
-    // Filter out model-locked, excluded, and Antigravity quota-exhausted connections.
-    const availableConnections = connections.filter(c => {
+    const isConnAvailable = (c) => {
       if (excludeSet.has(c.id)) return false;
       if (isModelLockActive(c, model)) return false;
-      // Antigravity: skip if live quota exhausted for this model
       if (isAntigravity && model && antigravityQuotaCache) {
         const quota = antigravityQuotaCache.get(c.id)?.[model];
         if (quota && quota.remainingPercentage <= 0 && quota.resetAt && new Date(quota.resetAt).getTime() > Date.now()) {
@@ -95,10 +93,96 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
         }
       }
       return true;
-    });
+    };
 
-    log.debug("AUTH", `${provider} | available: ${availableConnections.length}/${connections.length}`);
-    connections.forEach(c => {
+    // Caller tenant context
+    const callerContext = options?.callerContext || null;
+    const userId = callerContext?.userId || options?.userId || null;
+    const orgId = callerContext?.orgId || options?.orgId || null;
+    const isSuperadmin = callerContext?.isSuperadmin || options?.isSuperadmin || false;
+
+    let availableConnections = [];
+    let activePoolForErrors = connections;
+
+    // Multi-tenant Dynamic Credential Resolution
+    if (orgId && !isSuperadmin) {
+      // Tier 1: Personal connection (owner_user_id == caller_id AND org_id == activeOrgId)
+      const tier1Pool = userId ? connections.filter(c => c.org_id === orgId && c.owner_user_id === userId) : [];
+      const tier1Available = tier1Pool.filter(isConnAvailable);
+
+      if (tier1Available.length > 0) {
+        availableConnections = tier1Available;
+        activePoolForErrors = tier1Pool;
+        log.debug("AUTH", `${provider} | [Tier 1 Personal] matched ${tier1Available.length}/${tier1Pool.length} connection(s) for user=${userId}`);
+      } else {
+        // Tier 2: Fallback to connections where org_id == activeOrgId AND is_org_shared == 1
+        const tier2Pool = connections.filter(c => c.org_id === orgId && (c.is_org_shared === 1 || c.is_org_shared === true));
+        const tier2Available = tier2Pool.filter(isConnAvailable);
+
+        if (tier2Available.length > 0) {
+          availableConnections = tier2Available;
+          activePoolForErrors = tier2Pool;
+          log.debug("AUTH", `${provider} | [Tier 2 Org-Shared] matched ${tier2Available.length}/${tier2Pool.length} connection(s) for org=${orgId}`);
+        } else {
+          // Tier 3: Fallback to platform pay-as-you-go pool (openrouter/deepseek), metered against ceiling
+          let tier3Available = [];
+          let tier3Pool = [];
+          try {
+            const { getOrganizationById } = await import("@/lib/db/repos/organizationsRepo.js");
+            const { getOrgCurrentMonthlySpend } = await import("@/lib/db/repos/usageRepo.js");
+            const org = await getOrganizationById(orgId);
+            const ceiling = Number(org?.pay_as_you_go_ceiling || 0);
+
+            if (ceiling > 0) {
+              const currentSpend = await getOrgCurrentMonthlySpend(orgId);
+              if (currentSpend < ceiling) {
+                const candidateProviders = [providerId, "openrouter", "deepseek"];
+                for (const p of candidateProviders) {
+                  // Platform PAYG connections belong to the default/platform pool ('org_default')
+                  const paygConns = await getProviderConnections({
+                    provider: p,
+                    isActive: true,
+                    org_id: "org_default",
+                    is_org_shared: 1,
+                  });
+                  tier3Pool.push(...paygConns);
+                  const avail = paygConns.filter(isConnAvailable);
+                  if (avail.length > 0) {
+                    tier3Available = avail;
+                    log.info("AUTH", `${provider} | [Tier 3 PAYG] Fallback to ${p} pool (spend ${currentSpend}/${ceiling})`);
+                    break;
+                  }
+                }
+              } else {
+                log.warn("AUTH", `${provider} | [Tier 3 PAYG] Org ${orgId} reached pay-as-you-go ceiling (${currentSpend}/${ceiling})`);
+              }
+            }
+          } catch (err) {
+            log.error("AUTH", `Tier 3 payg error: ${err.message}`);
+          }
+
+          if (tier3Available.length > 0) {
+            availableConnections = tier3Available;
+            activePoolForErrors = tier3Pool;
+          } else {
+            availableConnections = [];
+            activePoolForErrors = tier1Pool.length > 0 ? tier1Pool : (tier2Pool.length > 0 ? tier2Pool : connections);
+          }
+        }
+      }
+    } else if (isSuperadmin) {
+      // Superadmin has platform-wide access
+      activePoolForErrors = connections;
+      availableConnections = connections.filter(isConnAvailable);
+    } else {
+      // Local / unauthenticated fallback
+      const defaultPool = connections.filter(c => !c.org_id || c.org_id === "org_default" || c.is_org_shared === 1 || c.is_org_shared === true);
+      activePoolForErrors = defaultPool.length > 0 ? defaultPool : connections;
+      availableConnections = activePoolForErrors.filter(isConnAvailable);
+    }
+
+    log.debug("AUTH", `${provider} | available: ${availableConnections.length}/${activePoolForErrors.length}`);
+    activePoolForErrors.forEach(c => {
       const excluded = excludeSet.has(c.id);
       const locked = isModelLockActive(c, model);
       if (excluded || locked) {
@@ -109,10 +193,10 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
 
     if (availableConnections.length === 0) {
       // Find earliest persistent lock or lazy Antigravity quota-cache reset for retry timing.
-      const lockedConns = connections.filter(c => isModelLockActive(c, model));
+      const lockedConns = activePoolForErrors.filter(c => isModelLockActive(c, model));
       const expiries = lockedConns.map(c => getEarliestModelLockUntil(c)).filter(Boolean);
       if (isAntigravity && model && antigravityQuotaCache) {
-        connections.forEach((c) => {
+        activePoolForErrors.forEach((c) => {
           const resetAt = antigravityQuotaCache.get(c.id)?.[model]?.resetAt;
           if (resetAt && new Date(resetAt).getTime() > Date.now()) expiries.push(resetAt);
         });
@@ -120,7 +204,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       const earliest = expiries.sort()[0] || null;
       if (earliest) {
         const earliestConn = lockedConns[0];
-        log.warn("AUTH", `${provider} | all ${connections.length} accounts locked for ${model || "all"} (${formatRetryAfter(earliest)}) | lastError=${earliestConn?.lastError?.slice(0, 50)}`);
+        log.warn("AUTH", `${provider} | all ${activePoolForErrors.length} accounts locked for ${model || "all"} (${formatRetryAfter(earliest)}) | lastError=${earliestConn?.lastError?.slice(0, 50)}`);
         return {
           allRateLimited: true,
           retryAfter: earliest,
@@ -129,7 +213,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
           lastErrorCode: earliestConn?.errorCode || null
         };
       }
-      log.warn("AUTH", `${provider} | all ${connections.length} accounts unavailable`);
+      log.warn("AUTH", `${provider} | all ${activePoolForErrors.length} accounts unavailable`);
       return null;
     }
 

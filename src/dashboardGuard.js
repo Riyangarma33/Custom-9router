@@ -25,6 +25,7 @@ const PUBLIC_API_PATHS = [
   "/api/init",
   "/api/locale",
   "/api/auth/login",
+  "/api/auth/signup",
   "/api/auth/logout",
   "/api/auth/status",
   "/api/auth/oidc",
@@ -51,6 +52,7 @@ const ALWAYS_PROTECTED = [
 // Require auth, but allow through if requireLogin is disabled
 const PROTECTED_API_PATHS = [
   "/api/settings",
+  "/api/orgs",
   "/api/keys",
   "/api/providers",
   "/api/provider-nodes",

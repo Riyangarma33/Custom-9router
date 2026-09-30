@@ -2,6 +2,7 @@ import {
   extractApiKey, isValidApiKey,
   getProviderCredentials, markAccountUnavailable,
 } from "../services/auth.js";
+import { resolveCallerContext } from "@/lib/auth/rbac";
 import { getSettings } from "@/lib/localDb";
 import { getModelInfo, getComboModels } from "../services/model.js";
 import { handleTtsCore } from "open-sse/handlers/ttsCore.js";
@@ -83,9 +84,10 @@ async function handleSingleModelTts(body, modelStr, responseFormat, language, st
   const excludeConnectionIds = new Set();
   let lastError = null;
   let lastStatus = null;
+  const callerContext = await resolveCallerContext(request);
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model);
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { callerContext });
 
     if (!credentials || credentials.allRateLimited) {
       if (credentials?.allRateLimited) {
