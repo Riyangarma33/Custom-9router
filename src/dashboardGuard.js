@@ -170,7 +170,19 @@ async function canAccessLocalOnlyRoute(request) {
 }
 
 async function hasValidToken(request) {
-  const token = request.cookies.get("auth_token")?.value;
+  let token = request.cookies?.get?.("auth_token")?.value;
+  if (!token) {
+    const authHeader = request.headers?.get?.("Authorization") || request.headers?.get?.("authorization");
+    if (authHeader?.startsWith("Bearer ")) {
+      const candidate = authHeader.slice(7).trim();
+      if (candidate.split(".").length === 3) token = candidate;
+    }
+  }
+  if (!token) {
+    const cookieHeader = request.headers?.get?.("cookie") || "";
+    const match = cookieHeader.match(/auth_token=([^;]+)/);
+    if (match) token = decodeURIComponent(match[1]);
+  }
   return await verifyDashboardAuthToken(token);
 }
 
