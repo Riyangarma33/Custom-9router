@@ -23,6 +23,10 @@ export default function APIPageClient({ machineId }) {
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newKeyName, setNewKeyName] = useState("");
+  const [isSuperadmin, setIsSuperadmin] = useState(false);
+  const [orgs, setOrgs] = useState([]);
+  const [selectedOrgFilter, setSelectedOrgFilter] = useState("all");
+  const [newKeyOrgId, setNewKeyOrgId] = useState("");
   const [createdKey, setCreatedKey] = useState(null);
   const [confirmState, setConfirmState] = useState(null);
 
@@ -245,10 +249,32 @@ export default function APIPageClient({ machineId }) {
     }
   };
 
-  const fetchData = async () => {
+  const fetchData = async (orgFilter = selectedOrgFilter) => {
     try {
+      // Check auth status & load organizations for superadmin
+      try {
+        const authRes = await fetch("/api/auth/status", { cache: "no-store" });
+        if (authRes.ok) {
+          const authData = await authRes.json();
+          const superUser = !!authData?.isSuperadmin;
+          setIsSuperadmin(superUser);
+          if (superUser) {
+            const orgsRes = await fetch("/api/orgs", { cache: "no-store" });
+            if (orgsRes.ok) {
+              const orgsData = await orgsRes.json();
+              const list = orgsData.organizations || [];
+              setOrgs(list);
+              if (list.length > 0 && !newKeyOrgId) {
+                setNewKeyOrgId(list[0].id);
+              }
+            }
+          }
+        }
+      } catch {}
+
       const fetchKeys = async () => {
-        const res = await fetch("/api/keys");
+        const query = orgFilter && orgFilter !== "all" ? `?orgId=${encodeURIComponent(orgFilter)}` : "";
+        const res = await fetch(`/api/keys${query}`);
         if (!res.ok) return [];
         const data = await res.json();
         return data.keys || [];
@@ -256,7 +282,7 @@ export default function APIPageClient({ machineId }) {
 
       let existing = await fetchKeys();
       // Auto-provision a default key for first-time users so the endpoint works out of the box.
-      if (existing.length === 0) {
+      if (existing.length === 0 && !isSuperadmin) {
         try {
           const createRes = await fetch("/api/keys", {
             method: "POST",
@@ -272,6 +298,11 @@ export default function APIPageClient({ machineId }) {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleOrgFilterChange = (val) => {
+    setSelectedOrgFilter(val);
+    fetchData(val);
   };
 
   // u2500u2500u2500 Cloudflare Tunnel handlers
@@ -618,10 +649,14 @@ export default function APIPageClient({ machineId }) {
     if (!newKeyName.trim()) return;
 
     try {
+      const payload = { name: newKeyName.trim() };
+      if (isSuperadmin && newKeyOrgId) {
+        payload.org_id = newKeyOrgId;
+      }
       const res = await fetch("/api/keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newKeyName }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
 
@@ -957,14 +992,33 @@ export default function APIPageClient({ machineId }) {
 
       {/* API Keys */}
       <Card id="require-api-key">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <span className="material-symbols-outlined text-primary">vpn_key</span>
             API Keys
           </h2>
-          <Button icon="add" onClick={() => setShowAddModal(true)}>
-            Create Key
-          </Button>
+          <div className="flex items-center gap-2">
+            {isSuperadmin && orgs.length > 0 && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-text-muted">Org:</span>
+                <select
+                  value={selectedOrgFilter}
+                  onChange={(e) => handleOrgFilterChange(e.target.value)}
+                  className="px-2.5 py-1.5 rounded-lg border border-border bg-surface text-xs font-medium text-text-main"
+                >
+                  <option value="all">All Organizations</option>
+                  {orgs.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <Button icon="add" onClick={() => setShowAddModal(true)}>
+              Create Key
+            </Button>
+          </div>
         </div>
 
         <div className="flex items-center justify-between pb-4 mb-4 border-b border-border">
@@ -1005,7 +1059,15 @@ export default function APIPageClient({ machineId }) {
                 className={`group flex items-center justify-between py-3 border-b border-black/[0.03] dark:border-white/[0.03] last:border-b-0 ${key.isActive === false ? "opacity-60" : ""}`}
               >
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium">{key.name}</p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-sm font-medium">{key.name}</p>
+                    {key.org_name && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-primary/10 text-primary border border-primary/20">
+                        <span className="material-symbols-outlined text-[13px]">domain</span>
+                        {key.org_name}
+                      </span>
+                    )}
+                  </div>
                   <div className="flex items-center gap-2 mt-1">
                     <code className="text-xs text-text-muted font-mono">
                       {visibleKeys.has(key.id) ? key.key : maskKey(key.key)}
@@ -1084,6 +1146,22 @@ export default function APIPageClient({ machineId }) {
             onChange={(e) => setNewKeyName(e.target.value)}
             placeholder="Production Key"
           />
+          {isSuperadmin && orgs.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-text-muted">Target Organization</label>
+              <select
+                value={newKeyOrgId}
+                onChange={(e) => setNewKeyOrgId(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-border bg-surface text-sm text-text-main"
+              >
+                {orgs.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="flex gap-2">
             <Button onClick={handleCreateKey} fullWidth disabled={!newKeyName.trim()}>
               Create

@@ -50,6 +50,7 @@ export default function Sidebar({ onClose }) {
   const [isUpdating, setIsUpdating] = useState(false);
   const [shutdownCountdown, setShutdownCountdown] = useState(0);
   const [enableTranslator, setEnableTranslator] = useState(false);
+  const [isSuperadmin, setIsSuperadmin] = useState(false);
   const { copied, copy } = useCopyToClipboard(2000);
 
   const INSTALL_CMD = UPDATER_CONFIG.installCmdLatest;
@@ -58,6 +59,12 @@ export default function Sidebar({ onClose }) {
     useSettingsStore.getState().fetchSettings().then((data) => {
       if (data?.enableTranslator) setEnableTranslator(true);
     });
+    fetch("/api/auth/status")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.isSuperadmin) setIsSuperadmin(true);
+      })
+      .catch(() => {});
   }, []);
 
   // Lazy check for new npm version in background after initial render
@@ -184,6 +191,36 @@ export default function Sidebar({ onClose }) {
               <span className="text-[13px] font-medium">{item.label}</span>
             </Link>
           ))}
+
+          {/* Superadmin Platform Management */}
+          {isSuperadmin && (
+            <div className="pt-3 mt-2 space-y-0.5">
+              <p className="px-4 text-xs font-semibold text-purple-600 dark:text-purple-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-[15px]">shield_person</span>
+                Platform
+              </p>
+              <Link
+                href="/dashboard/organizations"
+                onClick={onClose}
+                className={cn(
+                  "flex items-center gap-3 px-3 py-1 rounded-lg transition-all group",
+                  isActive("/dashboard/organizations")
+                    ? "bg-purple-500/10 text-purple-600 dark:text-purple-400"
+                    : "text-text-muted hover:bg-surface-2 hover:text-text-main"
+                )}
+              >
+                <span
+                  className={cn(
+                    "material-symbols-outlined text-[18px]",
+                    isActive("/dashboard/organizations") ? "fill-1" : "group-hover:text-purple-600 dark:group-hover:text-purple-400 transition-colors"
+                  )}
+                >
+                  corporate_fare
+                </span>
+                <span className="text-[13px] font-medium">Organizations</span>
+              </Link>
+            </div>
+          )}
 
           {/* System section */}
           <div className="pt-3 mt-2 space-y-0.5">

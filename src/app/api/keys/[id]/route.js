@@ -48,7 +48,7 @@ export async function PUT(request, { params }) {
     if (isActive !== undefined) updateData.isActive = isActive;
     if (name !== undefined) updateData.name = name;
 
-    const updated = await updateApiKey(id, updateData);
+    const updated = await updateApiKey(id, updateData, ctx);
 
     return NextResponse.json({ key: updated });
   } catch (error) {
@@ -75,7 +75,7 @@ export async function DELETE(request, { params }) {
       return NextResponse.json({ error: "Forbidden: Only org_admin can delete keys" }, { status: 403 });
     }
 
-    const deleted = await deleteApiKey(id);
+    const deleted = await deleteApiKey(id, ctx);
     if (!deleted) {
       return NextResponse.json({ error: "Key not found" }, { status: 404 });
     }

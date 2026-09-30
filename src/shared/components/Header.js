@@ -9,6 +9,7 @@ import HeaderMenu from "@/shared/components/HeaderMenu";
 import HeaderLanguage from "@/shared/components/HeaderLanguage";
 import ThemeToggle from "@/shared/components/ThemeToggle";
 import DonateModal from "@/shared/components/DonateModal";
+import OrgSwitcher from "./OrgSwitcher";
 import { useHeaderSearchStore } from "@/store/headerSearchStore";
 import { OAUTH_PROVIDERS, APIKEY_PROVIDERS } from "@/shared/constants/config";
 import { MEDIA_PROVIDER_KINDS, AI_PROVIDERS } from "@/shared/constants/providers";
@@ -330,33 +331,12 @@ export default function Header({ onMenuClick, showMenuButton = true }) {
 
       {/* Right actions */}
       <div className="flex items-center gap-2 shrink-0">
-        {isSuperadmin ? (
-          <div className="hidden sm:flex items-center px-2.5 py-1 rounded-full border border-purple-500/30 bg-purple-500/10 text-xs font-medium text-purple-600 dark:text-purple-400">
-            <span className="material-symbols-outlined text-[15px] mr-1">shield_person</span>
-            <span>Superadmin</span>
-          </div>
-        ) : organizations.length > 1 ? (
-          <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-lg border border-border bg-surface text-xs">
-            <span className="material-symbols-outlined text-[15px] text-primary">domain</span>
-            <select
-              value={activeOrgId}
-              onChange={(e) => handleOrgSwitch(e.target.value)}
-              className="bg-transparent border-none text-xs font-medium text-text-main focus:outline-none cursor-pointer"
-            >
-              {organizations.map((org) => (
-                <option key={org.id} value={org.id}>
-                  {org.name} ({org.role})
-                </option>
-              ))}
-            </select>
-          </div>
-        ) : organizations.length === 1 && organizations[0].type !== "personal_auto" ? (
-          <div className="hidden sm:flex items-center px-2.5 py-1 rounded-full border border-border bg-surface/70 text-xs text-text-muted">
-            <span className="material-symbols-outlined text-[15px] mr-1 text-primary">domain</span>
-            <span className="font-medium text-text-main mr-1">{organizations[0].name}</span>
-            <span className="text-[10px] text-text-muted font-mono uppercase">({role})</span>
-          </div>
-        ) : null}
+        <OrgSwitcher
+          organizations={organizations}
+          activeOrgId={activeOrgId}
+          isSuperadmin={isSuperadmin}
+          role={role}
+        />
 
         {displayName && (loginMethod === "OIDC" || loginMethod === "SAML") && (
           <div

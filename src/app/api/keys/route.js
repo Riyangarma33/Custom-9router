@@ -5,21 +5,26 @@ import { resolveCallerContext } from "@/lib/auth/rbac";
 
 export const dynamic = "force-dynamic";
 
-// GET /api/keys - List API keys scoped to caller's org
+// GET /api/keys - List API keys scoped to caller's org (or with org attribution for superadmin)
 export async function GET(request) {
   try {
     const ctx = await resolveCallerContext(request);
     let filter = {};
+
     if (ctx.isSuperadmin) {
       if (request?.url) {
         const url = new URL(request.url);
         const orgIdParam = url.searchParams.get("orgId");
-        if (orgIdParam) filter.org_id = orgIdParam;
+        if (orgIdParam && orgIdParam !== "all") {
+          filter.org_id = orgIdParam;
+        }
       }
-    } else if (ctx.orgId) {
-      filter.org_id = ctx.orgId;
     } else {
-      filter.org_id = "org_default";
+      filter.accessibleBy = {
+        userId: ctx.userId,
+        orgId: ctx.orgId || "org_default",
+        isSuperadmin: false,
+      };
     }
 
     const keys = await getApiKeys(filter);
@@ -47,17 +52,22 @@ export async function POST(request) {
     }
 
     const body = await request.json();
-    const { name } = body;
+    const { name, org_id: targetOrgId } = body;
 
     if (!name) {
       return NextResponse.json({ error: "Name is required" }, { status: 400 });
     }
 
+    // If superadmin, allow explicit org targeting, else use session's active org
+    const effectiveOrgId = ctx.isSuperadmin
+      ? (targetOrgId || "org_default")
+      : (ctx.orgId || "org_default");
+
     // Always get machineId from server
     const machineId = await getConsistentMachineId();
     const apiKey = await createApiKey(name, machineId, {
-      userId: ctx.userId,
-      orgId: ctx.orgId || "org_default",
+      userId: ctx.userId || null,
+      orgId: effectiveOrgId,
     });
 
     return NextResponse.json({
@@ -66,6 +76,7 @@ export async function POST(request) {
       id: apiKey.id,
       machineId: apiKey.machineId,
       orgId: apiKey.org_id,
+      orgName: apiKey.org_name,
       userId: apiKey.user_id,
     }, { status: 201 });
   } catch (error) {

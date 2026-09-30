@@ -81,11 +81,63 @@ export default function ProfilePage() {
   const [proxyLoading, setProxyLoading] = useState(false);
   const [proxyTestLoading, setProxyTestLoading] = useState(false);
 
+  // Multi-Tenancy Organization & Workspace Profile State
+  const [profileAuth, setProfileAuth] = useState(null);
+  const [redeemCode, setRedeemCode] = useState("");
+  const [redeemLoading, setRedeemLoading] = useState(false);
+  const [redeemStatus, setRedeemStatus] = useState({ type: "", message: "" });
+
   const [isRemoteHost, setIsRemoteHost] = useState(false);
   useEffect(() => {
     if (typeof window !== "undefined")
       setIsRemoteHost(!["localhost", "127.0.0.1", "::1"].includes(window.location.hostname));
+
+    fetch("/api/auth/status", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((data) => setProfileAuth(data))
+      .catch(() => {});
   }, []);
+
+  const handleRedeemInvite = async (e) => {
+    e.preventDefault();
+    if (!redeemCode.trim()) return;
+    setRedeemLoading(true);
+    setRedeemStatus({ type: "", message: "" });
+    try {
+      const res = await fetch("/api/orgs/invitations/redeem", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: redeemCode.trim() }),
+      });
+      if (res.ok) {
+        setRedeemStatus({ type: "success", message: "Successfully joined organization!" });
+        setRedeemCode("");
+        window.location.reload();
+      } else {
+        const data = await res.json();
+        setRedeemStatus({ type: "error", message: data.error || "Failed to redeem invitation code" });
+      }
+    } catch {
+      setRedeemStatus({ type: "error", message: "Failed to redeem code" });
+    } finally {
+      setRedeemLoading(false);
+    }
+  };
+
+  const handleSwitchOrgProfile = async (targetOrgId) => {
+    try {
+      const res = await fetch("/api/auth/org/switch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orgId: targetOrgId }),
+      });
+      if (res.ok) {
+        window.location.reload();
+      }
+    } catch (err) {
+      console.error("Failed to switch organization:", err);
+    }
+  };
 
   useEffect(() => {
     fetch("/api/settings")
@@ -837,6 +889,108 @@ export default function ProfilePage() {
               <p className={`text-sm ${dbStatus.type === "error" ? "text-red-500" : "text-green-600 dark:text-green-400"}`}>
                 {dbStatus.message}
               </p>
+            )}
+          </div>
+        </Card>
+
+        {/* Organizations & Workspaces */}
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <div className="size-10 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                <span className="material-symbols-outlined text-[20px]">corporate_fare</span>
+              </div>
+              <div>
+                <h3 className="text-base sm:text-lg font-semibold">Organizations & Workspaces</h3>
+                <p className="text-xs text-text-muted">Manage your tenant memberships and team invitations</p>
+              </div>
+            </div>
+
+            {profileAuth?.isSuperadmin && (
+              <Button href="/dashboard/organizations" variant="primary" size="sm">
+                Manage Platform
+              </Button>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-4">
+            {profileAuth?.isSuperadmin ? (
+              <div className="p-3 rounded-lg bg-purple-500/10 border border-purple-500/20 text-xs text-purple-600 dark:text-purple-400">
+                You are currently operating as <b>Platform Superadmin</b>. You have oversight across all organizations and cost pools.
+              </div>
+            ) : profileAuth?.organizations?.length > 0 ? (
+              <div className="flex flex-col gap-2">
+                <p className="text-xs font-medium text-text-muted">Your Memberships</p>
+                <div className="border border-border rounded-lg divide-y divide-border overflow-hidden">
+                  {profileAuth.organizations.map((org) => {
+                    const isActive = org.id === profileAuth.activeOrgId;
+                    const isPersonal = org.type === "personal_auto";
+
+                    return (
+                      <div
+                        key={org.id}
+                        className={`flex items-center justify-between p-3 ${
+                          isActive ? "bg-primary/5" : ""
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className="material-symbols-outlined text-primary text-[18px]">
+                            {isPersonal ? "account_circle" : "domain"}
+                          </span>
+                          <div className="truncate">
+                            <p className="text-sm font-medium text-text-main truncate">
+                              {org.name}
+                            </p>
+                            <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-surface-subtle text-text-muted border border-border/40">
+                              {org.role}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div>
+                          {isActive ? (
+                            <span className="inline-flex items-center gap-1 text-xs font-semibold text-primary px-2.5 py-1 rounded-full bg-primary/10">
+                              <span className="size-1.5 rounded-full bg-primary" />
+                              Active
+                            </span>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleSwitchOrgProfile(org.id)}
+                            >
+                              Switch
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+
+            {/* Redeem Invitation Code Form */}
+            {!profileAuth?.isSuperadmin && (
+              <form onSubmit={handleRedeemInvite} className="pt-2 border-t border-border flex flex-col gap-2">
+                <label className="text-xs font-medium text-text-muted">Join a Team with Invitation Code</label>
+                <div className="flex gap-2">
+                  <Input
+                    type="text"
+                    placeholder="Enter invitation code..."
+                    value={redeemCode}
+                    onChange={(e) => setRedeemCode(e.target.value)}
+                  />
+                  <Button type="submit" variant="primary" loading={redeemLoading} disabled={!redeemCode.trim()}>
+                    Join
+                  </Button>
+                </div>
+                {redeemStatus.message && (
+                  <p className={`text-xs ${redeemStatus.type === "error" ? "text-red-500" : "text-green-600 dark:text-green-400"}`}>
+                    {redeemStatus.message}
+                  </p>
+                )}
+              </form>
             )}
           </div>
         </Card>
