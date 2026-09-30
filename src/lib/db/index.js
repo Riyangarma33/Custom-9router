@@ -41,7 +41,7 @@ export {
 // Users (Multi-Tenancy)
 export {
   getUserById, getUserByEmail, createUser, updateUser,
-  recordUserLogin, verifyUserPassword, upsertSsoUser,
+  recordUserLogin, verifyUserPassword, upsertSsoUser, registerUserWithBootstrapping,
 } from "./repos/usersRepo.js";
 
 // Org Memberships (Multi-Tenancy)

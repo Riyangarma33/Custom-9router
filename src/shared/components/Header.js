@@ -350,7 +350,7 @@ export default function Header({ onMenuClick, showMenuButton = true }) {
               ))}
             </select>
           </div>
-        ) : organizations.length === 1 ? (
+        ) : organizations.length === 1 && organizations[0].type !== "personal_auto" ? (
           <div className="hidden sm:flex items-center px-2.5 py-1 rounded-full border border-border bg-surface/70 text-xs text-text-muted">
             <span className="material-symbols-outlined text-[15px] mr-1 text-primary">domain</span>
             <span className="font-medium text-text-main mr-1">{organizations[0].name}</span>

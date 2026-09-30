@@ -52,6 +52,7 @@ export {
   recordUserLogin,
   verifyUserPassword,
   upsertSsoUser,
+  registerUserWithBootstrapping,
   getMembershipsForUser,
   getMembershipsForOrg,
   getMembership,

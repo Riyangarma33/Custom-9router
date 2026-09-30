@@ -35,6 +35,7 @@ export const TABLES = {
     columns: {
       id: "TEXT PRIMARY KEY",
       name: "TEXT NOT NULL",
+      type: "TEXT DEFAULT 'standard'",
       plan_tier: "TEXT DEFAULT 'free'",
       pay_as_you_go_ceiling: "REAL DEFAULT 0",
       status: "TEXT DEFAULT 'active'",
@@ -44,6 +45,7 @@ export const TABLES = {
     },
     indexes: [
       "CREATE INDEX IF NOT EXISTS idx_orgs_status ON organizations(status)",
+      "CREATE INDEX IF NOT EXISTS idx_orgs_type ON organizations(type)",
     ],
   },
   users: {

@@ -12,6 +12,7 @@ function rowToMembership(row) {
     userEmail: row.email,
     userDisplayName: row.display_name,
     orgName: row.org_name,
+    orgType: row.org_type || "standard",
   };
 }
 
@@ -19,7 +20,7 @@ export async function getMembershipsForUser(userId) {
   if (!userId) return [];
   const db = await getAdapter();
   const rows = db.all(
-    `SELECT m.*, o.name as org_name, o.status as org_status
+    `SELECT m.*, o.name as org_name, o.type as org_type, o.status as org_status
      FROM org_memberships m
      JOIN organizations o ON m.org_id = o.id
      WHERE m.user_id = ?

@@ -118,6 +118,7 @@ export async function GET() {
       activeOrg: activeOrg ? {
         id: activeOrg.id,
         name: activeOrg.name,
+        type: activeOrg.type,
         plan_tier: activeOrg.plan_tier,
         status: activeOrg.status,
       } : null,
@@ -125,6 +126,7 @@ export async function GET() {
       organizations: memberships.map((m) => ({
         id: m.orgId,
         name: m.orgName,
+        type: m.orgType,
         role: m.role,
         status: m.orgStatus,
       })),

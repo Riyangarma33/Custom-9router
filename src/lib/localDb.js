@@ -14,7 +14,7 @@ export {
   getOrganizations, getOrganizationsForUser, getOrganizationById,
   createOrganization, updateOrganization, setOrganizationStatus, deleteOrganization,
   getUserById, getUserByEmail, createUser, updateUser,
-  recordUserLogin, verifyUserPassword, upsertSsoUser,
+  recordUserLogin, verifyUserPassword, upsertSsoUser, registerUserWithBootstrapping,
   getMembershipsForUser, getMembershipsForOrg, getMembership,
   addMembership, updateMembershipRole, removeMembership,
   createInvitation, getInvitationByCode, getInvitationsForOrg,

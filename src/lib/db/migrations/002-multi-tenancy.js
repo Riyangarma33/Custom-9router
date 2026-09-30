@@ -38,6 +38,8 @@ export default {
       }
     }
 
+    ensureColumn(db, "organizations", "type", "TEXT DEFAULT 'standard'");
+
     // 2. Ensure additive columns on existing tables
     ensureColumn(db, "providerConnections", "owner_user_id", "TEXT");
     ensureColumn(db, "providerConnections", "org_id", "TEXT");

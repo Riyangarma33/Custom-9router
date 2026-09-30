@@ -6,6 +6,7 @@ function rowToOrg(row) {
   return {
     id: row.id,
     name: row.name,
+    type: row.type || "standard",
     plan_tier: row.plan_tier || "free",
     pay_as_you_go_ceiling: Number(row.pay_as_you_go_ceiling || 0),
     status: row.status || "active",
@@ -49,6 +50,7 @@ export async function getOrganizationById(id) {
 export async function createOrganization({
   id = uuidv4(),
   name,
+  type = "standard",
   plan_tier = "free",
   pay_as_you_go_ceiling = 0.0,
   created_by = "superadmin",
@@ -61,6 +63,7 @@ export async function createOrganization({
   const org = {
     id,
     name: name.trim(),
+    type: type || "standard",
     plan_tier,
     pay_as_you_go_ceiling: Number(pay_as_you_go_ceiling) || 0,
     status: "active",
@@ -70,11 +73,12 @@ export async function createOrganization({
   };
 
   db.run(
-    `INSERT INTO organizations(id, name, plan_tier, pay_as_you_go_ceiling, status, created_by, created_at, updated_at)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO organizations(id, name, type, plan_tier, pay_as_you_go_ceiling, status, created_by, created_at, updated_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       org.id,
       org.name,
+      org.type,
       org.plan_tier,
       org.pay_as_you_go_ceiling,
       org.status,
